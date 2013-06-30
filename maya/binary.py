@@ -34,6 +34,9 @@ CREA = be_word4("CREA")
 SLCT = be_word4("SLCT")
 ATTR = be_word4("ATTR")
 
+CONS = be_word4("CONS")
+CONN = be_word4("CONN")
+
 # Data types
 FLGS = be_word4("FLGS")
 DBLE = be_word4("DBLE")
@@ -54,118 +57,143 @@ class MayaBinaryParser(IffParser):
     def __init__(self, stream):
         # TODO support 64-bit IFF files from Maya 2014+
         super(MayaBinaryParser, self).__init__(stream, format=MAYA_BINARY_32)
-        self.__mtypeid_to_typename = {}
 
         # FIXME load type info modules based on maya and plugin versions
+        self.__mtypeid_to_typename = {}
         self._load_mtypeid_database(os.path.join(os.path.dirname(__file__),
                                     "modules", "maya", "2012", "typeids.dat"))
 
     def on_iff_chunk(self, chunk):
         if chunk.typeid == FOR4:
-            element_type = be_read4(self.stream)
-
-            if element_type == MAYA:
+            mtypeid = be_read4(self.stream)
+            if mtypeid == MAYA:
                 self._handle_all_chunks()
-        
-            # Parse header
-            elif element_type == HEAD:
+            elif mtypeid == HEAD:
+                self._parse_maya_header()
+            elif mtypeid == FREF:
+                self._parse_file_reference()
+            elif mtypeid == CONN:
+                self._parse_connection()
+            else:
+                self._parse_node(mtypeid)
 
+        elif chunk.typeid == LIS4:
+            mtypeid = be_read4(self.stream)
+            if mtypeid == CONS:
+                self._handle_all_chunks()
+
+    def _parse_maya_header(self):
+        angle_unit = None
+        linear_unit = None
+        time_unit = None
+
+        for chunk in self._iter_chunks():
+
+            # requires (maya)
+            if chunk.typeid == VERS:
+                self.on_requires_maya(self._read_chunk_data(chunk))
+            
+            # requires (plugin)
+            elif chunk.typeid == PLUG:
+                plugin = read_null_terminated(self.stream)
+                version = read_null_terminated(self.stream)
+                self.on_requires_plugin(plugin, version)
+
+            # fileInfo
+            elif chunk.typeid == FINF:
+                key = read_null_terminated(self.stream)
+                value = read_null_terminated(self.stream)
+                self.on_file_info(key, value)
+
+            # on_current_unit callback is deferred until all three 
+            # angle, linear and time units are read from the stream.
+
+            # currentUnit (angle)
+            elif chunk.typeid == AUNI:
+                angle_unit = self._read_chunk_data(chunk)
+
+            # currentUnit (linear)
+            elif chunk.typeid == LUNI:
+                linear_unit = self._read_chunk_data(chunk)
+
+            # currentUnit (time)
+            elif chunk.typeid == TUNI:
+                time_unit = self._read_chunk_data(chunk)
+
+            # Got all three units
+            if angle_unit and linear_unit and time_unit:
+                self.on_current_unit(angle=angle_unit,
+                                     linear=linear_unit,
+                                     time=time_unit)
                 angle_unit = None
                 linear_unit = None
                 time_unit = None
 
-                for head_chunk in self._iter_chunks():
+        # Didn't get all three units (this is non standard)
+        if angle_unit or linear_unit or time_unit:
+            self.on_current_unit(angle=angle_unit,
+                                 linear=linear_unit,
+                                 time=time_unit)
 
-                    # requires (maya)
-                    if head_chunk.typeid == VERS:
-                        self.on_requires_maya(self._read_chunk_data(head_chunk))
-                    
-                    # requires (plugin)
-                    elif head_chunk.typeid == PLUG:
-                        plugin = read_null_terminated(self.stream)
-                        version = read_null_terminated(self.stream)
-                        self.on_requires_plugin(plugin, version)
+    def _parse_file_reference(self):
+        for chunk in self._iter_chunks(types=[FREF]):
+            self.on_file_reference(read_null_terminated(self.stream))
 
-                    # fileInfo
-                    elif head_chunk.typeid == FINF:
-                        key = read_null_terminated(self.stream)
-                        value = read_null_terminated(self.stream)
-                        self.on_file_info(key, value)
+    def _parse_connection(self):
+        self.stream.read(9)
+        src = read_null_terminated(self.stream)
+        dst = read_null_terminated(self.stream)
+        self.on_connect_attr(src, dst)
 
-                    # on_current_unit callback is deferred until all three 
-                    # angle, linear and time units are read from the stream.
+    def _parse_node(self, mtypeid):
+        for chunk in self._iter_chunks():
 
-                    # currentUnit (angle)
-                    elif head_chunk.typeid == AUNI:
-                        angle_unit = self._read_chunk_data(head_chunk)
+            # Create node
+            if chunk.typeid == CREA:
+                typename = self.__mtypeid_to_typename.get(mtypeid, "unknown")
+                name_parts = self._read_chunk_data(chunk)[1:-1].split("\0")
+                name = name_parts[0]
+                parent_name = name_parts[1] if len(name_parts) > 1 else None
+                self.on_create_node(typename, name, parent=parent_name)
 
-                    # currentUnit (linear)
-                    elif head_chunk.typeid == LUNI:
-                        linear_unit = self._read_chunk_data(head_chunk)
-
-                    # currentUnit (time)
-                    elif head_chunk.typeid == TUNI:
-                        time_unit = self._read_chunk_data(head_chunk)
-
-                    # Got all three units
-                    if angle_unit and linear_unit and time_unit:
-                        self.on_current_unit(angle=angle_unit,
-                                             linear=linear_unit,
-                                             time=time_unit)
-                        angle_unit = None
-                        linear_unit = None
-                        time_unit = None
-
-                # Didn't get all three units (this is non standard)
-                if angle_unit or linear_unit or time_unit:
-                    self.on_current_unit(angle=angle_unit,
-                                         linear=linear_unit,
-                                         time=time_unit)
-
-            # Parse file references
-            elif element_type == FREF:
-                for chunk in self._iter_chunks(types=[FREF]):
-                    self.on_file_reference(read_null_terminated(self.stream))
-
-            # Modify builtin node
-            elif element_type == SLCT:
+            # Select the current node
+            elif chunk.typeid == SLCT:
                 pass
 
+            # Dynamic attribute
+            elif chunk.typeid == ATTR:
+                pass
+
+            # Flags
+            elif chunk.typeid == FLGS:
+                pass
+
+            # Set attribute
             else:
-                for child_chunk in self._iter_chunks():
+                self._parse_attribute(chunk.typeid)
 
-                    # Create node
-                    if child_chunk.typeid == CREA:
-                        typename = self.__mtypeid_to_typename.get(element_type, "unknown")
-                        name_parts = self._read_chunk_data(child_chunk)[1:-1].split("\0")
-                        name = name_parts[0]
-                        parent_name = name_parts[1] if len(name_parts) > 1 else None
-                        self.on_create_node(typename, name, parent=parent_name)
+    def _parse_attribute(self, mtypeid):
+        if mtypeid not in (STR_, DBLE, DBL3):
+            return
 
-                    # Dynamic attribute
-                    elif child_chunk.typeid == ATTR:
-                        pass
+        attr_name = read_null_terminated(self.stream)
+        mystery_flag = self.stream.read(1)
+        count = plug_element_count(attr_name)
 
-                    # String value
-                    elif child_chunk.typeid == STR_:
-                        attr_name = read_null_terminated(self.stream)
-                        self.stream.read(1)
-                        value = read_null_terminated(self.stream)
-                        self.on_set_attr(attr_name, value, type="string")
+        if mtypeid == STR_:
+            value = read_null_terminated(self.stream)
+            data_type = "string"
 
-                    elif child_chunk.typeid == DBLE:
-                        attr_name = read_null_terminated(self.stream)
-                        count = plug_element_count(attr_name)
-                        self.stream.read(1)
-                        value = struct.unpack(">" + "d" * count, self.stream.read(8 * count))
-                        value = value[0] if count == 1 else value
-                        self.on_set_attr(attr_name, value, type="double")
+        elif mtypeid == DBLE:
+            value = struct.unpack(">" + "d" * count,
+                                  self.stream.read(8 * count))
+            value = value[0] if count == 1 else value
+            self.on_set_attr(attr_name, value, type="double")
 
-                    elif child_chunk.typeid == DBL3:
-                        attr_name = read_null_terminated(self.stream)
-                        self.stream.read(1)
-                        value = struct.unpack(">ddd", self.stream.read(24))
-                        self.on_set_attr(attr_name, value, type="double3")
+        elif mtypeid == DBL3:
+            value = struct.unpack(">" + "ddd" * count,
+                                  self.stream.read(24 * count))
+            self.on_set_attr(attr_name, value, type="double3")
 
     def on_requires_maya(self, version):
         pass
@@ -197,7 +225,7 @@ class MayaBinaryParser(IffParser):
     def on_set_attr_flags(self, plug, keyable=None, channelbox=None, lock=None):
         pass
 
-    def on_connect_attr(self, src_plug, dst_plug, next_available):
+    def on_connect_attr(self, src_plug, dst_plug):
         pass
 
     def _load_mtypeid_database(self, path):

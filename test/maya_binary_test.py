@@ -25,6 +25,9 @@ class TestMayaBinaryParser(MayaBinaryParser):
     def on_set_attr(self, name, value, type):
         print "Set Attribute: [%s] %s=%s" % (type, name, repr(value))
 
+    def on_connect_attr(self, src, dst):
+        print "Connect Attributes: %s => %s" % (src, dst)
+
 
 test = TestMayaBinaryParser(stream=open(sys.argv[1], "rb"))
 test.parse()

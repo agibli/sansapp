@@ -38,10 +38,6 @@ def _get_header_format(format):
     return fmt, size
 
 
-def _align(size, stride):
-    return stride * int(1 + ((size - 1) / stride))
-
-
 class IffParser(object):
 
     DEFAULT_CALLBACK = object()
@@ -52,10 +48,15 @@ class IffParser(object):
         self.__header_fmt, self.__header_size = _get_header_format(format)
         self.__current_chunk = None
         self.__current_chunk_end = None
+        self.__chunk_handlers = {}
 
     @property
     def stream(self):
         return self.__stream
+
+    @property
+    def chunk(self):
+        return self.__current_chunk
 
     def reset(self):
         self.__current_chunk = None
@@ -69,23 +70,23 @@ class IffParser(object):
     def on_iff_chunk(self, chunk):
         pass
 
-    def _handle_all_chunks(self, callback=DEFAULT_CALLBACK, types=None):
-        if callback is IffParser.DEFAULT_CALLBACK:
-            callback = self.on_iff_chunk
-
+    def _handle_all_chunks(self, types=None):
         for chunk in self._iter_chunks(types=types):
-            callback(chunk)
+            self._get_chunk_handler(chunk.typeid)(chunk)
 
-    def _handle_next_chunk(self, callback=DEFAULT_CALLBACK):
-        if callback is IffParser.DEFAULT_CALLBACK:
-            callback = self.on_iff_chunk
-
+    def _handle_next_chunk(self):
         chunk = self._read_next_chunk()
         if chunk:
             with self._using_chunk(chunk):
-                callback(chunk)
+                self._get_chunk_handler(chunk.typeid)(chunk)
                 return True
         return False
+
+    def _register_chunk_handler(self, typeid, callback):
+        self.__chunk_handlers[typeid] = callback
+
+    def _get_chunk_handler(self, typeid):
+        return self.__chunk_handlers.get(typeid, self.on_iff_chunk)
 
     def _iter_chunks(self, types=None):
         chunk = self._read_next_chunk()
@@ -111,9 +112,13 @@ class IffParser(object):
             self.__current_chunk_end = old_chunk_end
             self._set_offset(chunk_end)
 
-    def _read_chunk_data(self, chunk):
-        self.__stream.seek(chunk.data_offset)
-        return self.__stream.read(chunk.data_length)
+    def _read_chunk_data(self, chunk=None):
+        chunk = chunk or self.__current_chunk
+        if chunk:
+            self.__stream.seek(chunk.data_offset)
+            return self.__stream.read(chunk.data_length)
+        else:
+            return ""
 
     def _read_next_chunk(self):
         if self._is_past_the_end():
