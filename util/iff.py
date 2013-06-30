@@ -40,8 +40,6 @@ def _get_header_format(format):
 
 class IffParser(object):
 
-    DEFAULT_CALLBACK = object()
-
     def __init__(self, stream, format):
         self.__stream = stream
         self.__format = format
