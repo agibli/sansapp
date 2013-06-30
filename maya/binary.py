@@ -173,27 +173,43 @@ class MayaBinaryParser(IffParser):
                 self._parse_attribute(chunk.typeid)
 
     def _parse_attribute(self, mtypeid):
-        if mtypeid not in (STR_, DBLE, DBL3):
-            return
+        # TODO Support more primitive types
+        if mtypeid == STR_:
+            self._parse_string_attribute()
+        elif mtypeid == DBLE:
+            self._parse_double_attribute()
+        elif mtypeid == DBL3:
+            self._parse_double3_attribute()
+        else:
+            self._parse_mpxdata_attribute(mtypeid)
 
+    def _parse_attribute_info(self):
         attr_name = read_null_terminated(self.stream)
         mystery_flag = self.stream.read(1)
         count = plug_element_count(attr_name)
+        return attr_name, count
 
-        if mtypeid == STR_:
-            value = read_null_terminated(self.stream)
-            data_type = "string"
+    def _parse_string_attribute(self):
+        attr_name, count = self._parse_attribute_info()
+        value = read_null_terminated(self.stream)
+        self.on_set_attr(attr_name, value, type="string")
 
-        elif mtypeid == DBLE:
-            value = struct.unpack(">" + "d" * count,
-                                  self.stream.read(8 * count))
-            value = value[0] if count == 1 else value
-            self.on_set_attr(attr_name, value, type="double")
+    def _parse_double_attribute(self):
+        attr_name, count = self._parse_attribute_info()
+        value = struct.unpack(">" + "d" * count,
+                              self.stream.read(8 * count))
+        value = value[0] if count == 1 else value
+        self.on_set_attr(attr_name, value, type="double")
 
-        elif mtypeid == DBL3:
-            value = struct.unpack(">" + "ddd" * count,
-                                  self.stream.read(24 * count))
-            self.on_set_attr(attr_name, value, type="double3")
+    def _parse_double3_attribute(self):
+        attr_name, count = self._parse_attribute_info()
+        value = struct.unpack(">" + "ddd" * count,
+                              self.stream.read(24 * count))
+        self.on_set_attr(attr_name, value, type="double3")
+
+    def _parse_mpxdata_attribute(self, tyepid):
+        # TODO
+        pass
 
     def on_requires_maya(self, version):
         pass
