@@ -53,10 +53,11 @@ MAYA_BINARY_32 = IffFormat(endianness=IFF_BIG_ENDIAN,
                            size_bytes=4)
 
 
-class MayaBinaryParser(IffParser):
+class MayaBinaryParser(IffParser, MayaParserBase):
     def __init__(self, stream):
         # TODO support 64-bit IFF files from Maya 2014+
-        super(MayaBinaryParser, self).__init__(stream, format=MAYA_BINARY_32)
+        IffParser.__init__(self, stream, format=MAYA_BINARY_32)
+        MayaParserBase.__init__(self)
 
         # FIXME load type info modules based on maya and plugin versions
         self.__mtypeid_to_typename = {}
@@ -211,39 +212,6 @@ class MayaBinaryParser(IffParser):
         # TODO
         pass
 
-    def on_requires_maya(self, version):
-        pass
-
-    def on_requires_plugin(self, plugin, version):
-        pass
-
-    def on_file_info(self, key, value):
-        pass
-
-    def on_current_unit(self, angle, linear, time):
-        pass
-
-    def on_file_reference(self, path):
-        pass
-
-    def on_create_node(self, nodetype, name, parent):
-        pass
-
-    def on_select(self, name):
-        pass
-
-    def on_add_attr(self, node, name):
-        pass
-
-    def on_set_attr(self, name, value, type):
-        pass
-
-    def on_set_attr_flags(self, plug, keyable=None, channelbox=None, lock=None):
-        pass
-
-    def on_connect_attr(self, src_plug, dst_plug):
-        pass
-
     def _load_mtypeid_database(self, path):
         with open(path) as f:
             line = f.readline()
@@ -252,3 +220,7 @@ class MayaBinaryParser(IffParser):
                 typename = line[5:].strip()
                 self.__mtypeid_to_typename[mtypeid] = typename
                 line = f.readline()
+
+
+class MayaBinaryChunkTablePass(MayaBinaryParser):
+    pass
