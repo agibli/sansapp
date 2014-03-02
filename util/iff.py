@@ -68,14 +68,14 @@ class IffParser(object):
     def on_iff_chunk(self, chunk):
         pass
 
-    def _handle_all_chunks(self, types=None):
+    def _handle_all_chunks(self, types=None, alignment=None):
         for chunk in self._iter_chunks(types=types):
             self._get_chunk_handler(chunk.typeid)(chunk)
 
-    def _handle_next_chunk(self):
+    def _handle_next_chunk(self, alignment=None):
         chunk = self._read_next_chunk()
         if chunk:
-            with self._using_chunk(chunk):
+            with self._using_chunk(chunk, alignment=alignment):
                 self._get_chunk_handler(chunk.typeid)(chunk)
                 return True
         return False
@@ -97,7 +97,7 @@ class IffParser(object):
     @contextmanager
     def _using_chunk(self, chunk):
         data_end = chunk.data_offset + chunk.data_length
-        chunk_end = align(data_end, self.__format.alignment)
+        chunk_end = chunk.data_offset + align(chunk.data_length, self.__format.alignment)
         try:
             old_chunk = self.__current_chunk
             old_chunk_end = self.__current_chunk_end
@@ -106,9 +106,16 @@ class IffParser(object):
             self._set_offset(chunk.data_offset)
             yield chunk
         finally:
+            chunk_end = self.__current_chunk_end
             self.__current_chunk = old_chunk
             self.__current_chunk_end = old_chunk_end
             self._set_offset(chunk_end)
+
+    def _realign(self):
+        chunk = self.__current_chunk
+        base_offset = self._get_offset()
+        base_delta = chunk.data_offset + chunk.data_length - base_offset
+        self.__current_chunk_end = base_offset + align(base_delta, self.__format.alignment)
 
     def _read_chunk_data(self, chunk=None):
         chunk = chunk or self.__current_chunk

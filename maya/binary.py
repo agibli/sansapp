@@ -11,10 +11,15 @@ from ..util.iff import *
 from ..util import *
 
 
-# General
-MAYA = be_word4("Maya")
+# IFF chunk type IDs
 FOR4 = be_word4("FOR4")
 LIS4 = be_word4("LIS4")
+# 64 bits
+FOR8 = be_word4("FOR8")
+LIS8 = be_word4("LIS8")
+
+# General
+MAYA = be_word4("Maya")
 
 # File referencing
 FREF = be_word4("FREF")
@@ -51,13 +56,36 @@ MAYA_BINARY_32 = IffFormat(endianness=IFF_BIG_ENDIAN,
                            alignment=4,
                            typeid_bytes=4,
                            size_bytes=4)
+MAYA_BINARY_64 = IffFormat(endianness=IFF_BIG_ENDIAN,
+                           alignment=8,
+                           typeid_bytes=8,
+                           size_bytes=8)
+
+
+class MayaBinaryError(RuntimeError):
+    pass
 
 
 class MayaBinaryParser(IffParser, MayaParserBase):
     def __init__(self, stream):
-        # TODO support 64-bit IFF files from Maya 2014+
-        IffParser.__init__(self, stream, format=MAYA_BINARY_32)
+        # Determine Maya format based on magic number
+        # Maya 2014+ files begin with a FOR8 block, indicating a 64-bit format.
+        magic_number = stream.read(4)
+        stream.seek(0)
+        if magic_number == "FOR4":
+            format = MAYA_BINARY_32
+        elif magic_number == "FOR8":
+            format = MAYA_BINARY_64
+        else:
+            raise MayaBinaryError, "Bad magic number"
+
+        IffParser.__init__(self, stream, format=format)
         MayaParserBase.__init__(self)
+
+        maya64 = format == MAYA_BINARY_64
+        self.__maya64 = maya64
+        self.__node_chunk_type = FOR8 if maya64 else FOR4
+        self.__list_chunk_type = LIS8 if maya64 else LIS4
 
         # FIXME load type info modules based on maya and plugin versions
         self.__mtypeid_to_typename = {}
@@ -65,8 +93,10 @@ class MayaBinaryParser(IffParser, MayaParserBase):
                                     "modules", "maya", "2012", "typeids.dat"))
 
     def on_iff_chunk(self, chunk):
-        if chunk.typeid == FOR4:
-            mtypeid = be_read4(self.stream)
+        truncated_chunk_typeid = self._truncate_chunk_typeid(chunk.typeid)
+
+        if truncated_chunk_typeid == self.__node_chunk_type:
+            mtypeid = self._read_mtypeid()
             if mtypeid == MAYA:
                 self._handle_all_chunks()
             elif mtypeid == HEAD:
@@ -78,10 +108,19 @@ class MayaBinaryParser(IffParser, MayaParserBase):
             else:
                 self._parse_node(mtypeid)
 
-        elif chunk.typeid == LIS4:
-            mtypeid = be_read4(self.stream)
+        elif truncated_chunk_typeid == self.__list_chunk_type:
+            mtypeid = self._read_mtypeid()
             if mtypeid == CONS:
                 self._handle_all_chunks()
+
+    def _read_mtypeid(self):
+        # 64-bit format still uses 32-bit MTypeIds
+        result = be_read4(self.stream)
+        self._realign()
+        return result
+
+    def _truncate_chunk_typeid(self, typeid):
+        return typeid >> 32 if self.__maya64 else typeid
 
     def _parse_maya_header(self):
         angle_unit = None
@@ -89,19 +128,20 @@ class MayaBinaryParser(IffParser, MayaParserBase):
         time_unit = None
 
         for chunk in self._iter_chunks():
+            truncated_chunk_typeid = self._truncate_chunk_typeid(chunk.typeid)
 
             # requires (maya)
-            if chunk.typeid == VERS:
+            if truncated_chunk_typeid == VERS:
                 self.on_requires_maya(self._read_chunk_data(chunk))
             
             # requires (plugin)
-            elif chunk.typeid == PLUG:
+            elif truncated_chunk_typeid == PLUG:
                 plugin = read_null_terminated(self.stream)
                 version = read_null_terminated(self.stream)
                 self.on_requires_plugin(plugin, version)
 
             # fileInfo
-            elif chunk.typeid == FINF:
+            elif truncated_chunk_typeid == FINF:
                 key = read_null_terminated(self.stream)
                 value = read_null_terminated(self.stream)
                 self.on_file_info(key, value)
@@ -110,15 +150,15 @@ class MayaBinaryParser(IffParser, MayaParserBase):
             # angle, linear and time units are read from the stream.
 
             # currentUnit (angle)
-            elif chunk.typeid == AUNI:
+            elif truncated_chunk_typeid == AUNI:
                 angle_unit = self._read_chunk_data(chunk)
 
             # currentUnit (linear)
-            elif chunk.typeid == LUNI:
+            elif truncated_chunk_typeid == LUNI:
                 linear_unit = self._read_chunk_data(chunk)
 
             # currentUnit (time)
-            elif chunk.typeid == TUNI:
+            elif truncated_chunk_typeid == TUNI:
                 time_unit = self._read_chunk_data(chunk)
 
             # Got all three units
@@ -141,16 +181,17 @@ class MayaBinaryParser(IffParser, MayaParserBase):
             self.on_file_reference(read_null_terminated(self.stream))
 
     def _parse_connection(self):
-        self.stream.read(9)
+        self.stream.read(17 if self.__maya64 else 9)
         src = read_null_terminated(self.stream)
         dst = read_null_terminated(self.stream)
         self.on_connect_attr(src, dst)
 
     def _parse_node(self, mtypeid):
         for chunk in self._iter_chunks():
+            truncated_chunk_typeid = self._truncate_chunk_typeid(chunk.typeid)
 
             # Create node
-            if chunk.typeid == CREA:
+            if truncated_chunk_typeid == CREA:
                 typename = self.__mtypeid_to_typename.get(mtypeid, "unknown")
                 name_parts = self._read_chunk_data(chunk)[1:-1].split("\0")
                 name = name_parts[0]
@@ -158,20 +199,20 @@ class MayaBinaryParser(IffParser, MayaParserBase):
                 self.on_create_node(typename, name, parent=parent_name)
 
             # Select the current node
-            elif chunk.typeid == SLCT:
+            elif truncated_chunk_typeid == SLCT:
                 pass
 
             # Dynamic attribute
-            elif chunk.typeid == ATTR:
+            elif truncated_chunk_typeid == ATTR:
                 pass
 
             # Flags
-            elif chunk.typeid == FLGS:
+            elif truncated_chunk_typeid == FLGS:
                 pass
 
             # Set attribute
             else:
-                self._parse_attribute(chunk.typeid)
+                self._parse_attribute(truncated_chunk_typeid)
 
     def _parse_attribute(self, mtypeid):
         # TODO Support more primitive types
@@ -220,7 +261,3 @@ class MayaBinaryParser(IffParser, MayaParserBase):
                 typename = line[5:].strip()
                 self.__mtypeid_to_typename[mtypeid] = typename
                 line = f.readline()
-
-
-class MayaBinaryChunkTablePass(MayaBinaryParser):
-    pass
