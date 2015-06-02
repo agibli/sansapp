@@ -10,6 +10,7 @@ class MayaAsciiParserBase(MayaParserBase):
         self.__command_handlers = {
             "requires": self._exec_requires,
             "fileInfo": self._exec_file_info,
+            "file": self._exec_file,
             "createNode": self._exec_create_node,
             "setAttr": self._exec_set_attr,
         }
@@ -36,6 +37,38 @@ class MayaAsciiParserBase(MayaParserBase):
 
     def _exec_file_info(self, args):
         self.on_file_info(args[0], args[1])
+
+    def _exec_file(self, args):
+        reference = False
+        reference_depth_info = None
+        namespace = None
+        defer_reference = False
+        reference_node = None
+
+        argptr = 0
+        while argptr < len(args):
+            arg = args[argptr]
+            if arg in ("-r", "--reference"):
+                reference = True
+                argptr += 1
+            elif arg in ("-rdi", "--referenceDepthInfo"):
+                reference_depth_info = int(args[argptr + 1])
+                argptr += 2
+            elif arg in ("-ns", "--namespace"):
+                namespace = args[argptr + 1]
+                argptr += 2
+            elif arg in ("-dr", "--deferReference"):
+                defer_reference = bool(int(args[argptr + 1]))
+                argptr += 2
+            elif arg in ("-rfn", "--referenceNode"):
+                reference_node = args[argptr + 1]
+                argptr += 2
+            else:
+                break
+
+        if argptr < len(args):
+            path = args[argptr]
+            self.on_file_reference(path)
 
     def _exec_create_node(self, args):
         nodetype = args[0]
