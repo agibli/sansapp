@@ -84,7 +84,7 @@ class MayaAsciiParser(MayaAsciiParserBase):
             if not line:
                 break
 
-            # Handle commands
+            # Handle comments
             elif line.startswith("//"):
                 self.on_comment(line[2:].strip())
 
