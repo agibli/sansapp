@@ -9,13 +9,16 @@ IFF_NATIVE_ENDIAN = 0
 IFF_BIG_ENDIAN = 1
 IFF_LITTLE_ENDIAN = 2
 
-IffFormat = namedtuple("IffFormat", ["endianness", "alignment",
-                                     "typeid_bytes", "size_bytes"])
+IffFormat = namedtuple("IffFormat", ["endianness",
+                                     "typeid_bytes",
+                                     "size_bytes",
+                                     "header_alignment",
+                                     "chunk_alignment"])
 
 IffChunk = namedtuple("IffChunk", ["typeid", "data_offset", "data_length"])
 
 
-def _get_header_format(format):
+def _get_header_struct(format):
     endian_formats = {IFF_NATIVE_ENDIAN: "=",
                       IFF_BIG_ENDIAN: ">",
                       IFF_LITTLE_ENDIAN: "<"}
@@ -30,12 +33,14 @@ def _get_header_format(format):
     if format.size_bytes not in byte_formats:
         raise ValueError, "Iff: Invalid size format"
 
-    fmt = (endian_formats[format.endianness] +
-           byte_formats[format.typeid_bytes] +
-           byte_formats[format.size_bytes])
-    size = format.typeid_bytes + format.size_bytes
+    typeid_padding = "x" * max(0, format.header_alignment - format.typeid_bytes)
+    size_padding = "x" * max(0, format.header_alignment - format.size_bytes)
 
-    return fmt, size
+    fmt = (endian_formats[format.endianness] +
+           byte_formats[format.typeid_bytes] + typeid_padding +
+           byte_formats[format.size_bytes] + size_padding)
+
+    return struct.Struct(fmt)
 
 
 class IffParser(object):
@@ -43,7 +48,7 @@ class IffParser(object):
     def __init__(self, stream, format):
         self.__stream = stream
         self.__format = format
-        self.__header_fmt, self.__header_size = _get_header_format(format)
+        self.__header_struct = _get_header_struct(format)
         self.__current_chunk = None
         self.__current_chunk_end = None
         self.__chunk_handlers = {}
@@ -97,7 +102,7 @@ class IffParser(object):
     @contextmanager
     def _using_chunk(self, chunk):
         data_end = chunk.data_offset + chunk.data_length
-        chunk_end = chunk.data_offset + align(chunk.data_length, self.__format.alignment)
+        chunk_end = chunk.data_offset + align(chunk.data_length, self.__format.chunk_alignment)
         try:
             old_chunk = self.__current_chunk
             old_chunk_end = self.__current_chunk_end
@@ -115,7 +120,7 @@ class IffParser(object):
         chunk = self.__current_chunk
         base_offset = self._get_offset()
         base_delta = chunk.data_offset + chunk.data_length - base_offset
-        self.__current_chunk_end = base_offset + align(base_delta, self.__format.alignment)
+        self.__current_chunk_end = base_offset + align(base_delta, self.__format.chunk_alignment)
 
     def _read_chunk_data(self, chunk=None):
         chunk = chunk or self.__current_chunk
@@ -140,9 +145,9 @@ class IffParser(object):
                         data_length=data_length)
 
     def _read_next_chunk_header(self):
-        buf = self.__stream.read(self.__header_size)
-        if len(buf) == self.__header_size:
-            return struct.unpack(self.__header_fmt, buf)
+        buf = self.__stream.read(self.__header_struct.size)
+        if len(buf) == self.__header_struct.size:
+            return self.__header_struct.unpack(buf)
         else:
             return None
 
